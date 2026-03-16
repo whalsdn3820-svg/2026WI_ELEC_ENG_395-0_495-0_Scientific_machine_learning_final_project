@@ -1,0 +1,1938 @@
+#%%
+
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import Lasso
+
+
+# ---------------------------------------------------
+# 1) Duffing oscillator RHS
+# ---------------------------------------------------
+def duffing_rhs(t, y, delta, alpha, beta, gamma, omega):
+
+    x, v = y
+
+    dxdt = v
+    dvdt = -delta*v - alpha*x - beta*x**3 + gamma*np.cos(omega*t)
+
+    return np.array([dxdt, dvdt])
+
+
+# ---------------------------------------------------
+# 2) RK4 solver
+# ---------------------------------------------------
+def rk4_step(f, t, y, h, *args):
+
+    k1 = f(t, y, *args)
+    k2 = f(t + 0.5*h, y + 0.5*h*k1, *args)
+    k3 = f(t + 0.5*h, y + 0.5*h*k2, *args)
+    k4 = f(t + h, y + h*k3, *args)
+
+    return y + (h/6)*(k1 + 2*k2 + 2*k3 + k4)
+
+
+def solve_rk4(f, t0, tf, h, y0, *args):
+
+    n_steps = int((tf - t0)/h)
+
+    t = np.zeros(n_steps+1)
+    y = np.zeros((n_steps+1, len(y0)))
+
+    t[0] = t0
+    y[0] = y0
+
+    ti = t0
+    yi = np.array(y0)
+
+    for i in range(n_steps):
+
+        yi = rk4_step(f, ti, yi, h, *args)
+        ti += h
+
+        t[i+1] = ti
+        y[i+1] = yi
+
+    return t, y
+
+
+# ---------------------------------------------------
+# 3) Generate Duffing data
+# ---------------------------------------------------
+
+delta = 0.2
+alpha = -1.0
+beta = 1.0
+gamma = 0.3
+omega = 1.2
+
+t0 = 0
+tf = 80
+dt = 0.01
+
+y0 = [1.0, 0.0]
+
+t, y = solve_rk4(
+    duffing_rhs,
+    t0,
+    tf,
+    dt,
+    y0,
+    delta,
+    alpha,
+    beta,
+    gamma,
+    omega
+)
+
+x = y[:,0]
+v = y[:,1]
+
+
+# ---------------------------------------------------
+# 4) Numerical derivatives
+# ---------------------------------------------------
+
+dxdt = np.gradient(x, dt)
+dvdt = np.gradient(v, dt)
+
+Xdot = np.vstack([dxdt, dvdt]).T
+
+
+# ---------------------------------------------------
+# 5) Build candidate library Θ(X)
+# ---------------------------------------------------
+
+def build_library(x, v, t):
+
+    Theta = np.column_stack([
+        np.ones_like(x),
+        x,
+        v,
+        x**2,
+        x*v,
+        v**2,
+        x**3,
+        np.cos(omega*t)
+    ])
+
+    names = [
+        "1",
+        "x",
+        "v",
+        "x^2",
+        "xv",
+        "v^2",
+        "x^3",
+        "cos(ωt)"
+    ]
+
+    return Theta, names
+
+
+Theta, names = build_library(x, v, t)
+
+
+# ---------------------------------------------------
+# 6) SINDy sparse regression
+# ---------------------------------------------------
+
+alpha_lasso = 0.01
+
+Xi = []
+
+for i in range(2):
+
+    model = Lasso(alpha=alpha_lasso,
+                  fit_intercept=False,
+                  max_iter=10000)
+
+    model.fit(Theta, Xdot[:,i])
+
+    Xi.append(model.coef_)
+
+Xi = np.array(Xi)
+
+
+# ---------------------------------------------------
+# 7) Print recovered equations
+# ---------------------------------------------------
+
+state_names = ["dx/dt", "dv/dt"]
+
+for i in range(2):
+
+    print("\nRecovered equation for", state_names[i])
+
+    terms = []
+
+    for coef, name in zip(Xi[i], names):
+
+        if abs(coef) > 1e-4:
+
+            terms.append(f"{coef:.3f}*{name}")
+
+    print(state_names[i], "=", " + ".join(terms))
+
+
+# ---------------------------------------------------
+# 8) SINDy RHS
+# ---------------------------------------------------
+
+def sindy_rhs(t, y, Xi):
+
+    x, v = y
+
+    library = np.array([
+        1,
+        x,
+        v,
+        x**2,
+        x*v,
+        v**2,
+        x**3,
+        np.cos(omega*t)
+    ])
+
+    dxdt = np.dot(Xi[0], library)
+    dvdt = np.dot(Xi[1], library)
+
+    return np.array([dxdt, dvdt])
+
+
+# ---------------------------------------------------
+# 9) Simulate SINDy dynamics
+# ---------------------------------------------------
+
+t_s, y_s = solve_rk4(sindy_rhs, t0, tf, dt, y0, Xi)
+
+x_s = y_s[:,0]
+v_s = y_s[:,1]
+
+
+# ---------------------------------------------------
+# 10) Visualization
+# ---------------------------------------------------
+
+fig, axes = plt.subplots(1,3, figsize=(16,4))
+
+
+# Time series
+axes[0].plot(t, x, label="True trajectory", linewidth=2)
+axes[0].plot(t_s, x_s, "--", label="SINDy reconstruction", linewidth=2)
+
+axes[0].set_xlabel("t")
+axes[0].set_ylabel("x(t)")
+axes[0].set_title("Time series")
+axes[0].legend()
+axes[0].grid(True)
+
+
+# Phase portrait
+axes[1].plot(x, v, label="True trajectory", linewidth=2)
+axes[1].plot(x_s, v_s, "--", label="SINDy reconstruction", linewidth=2)
+
+axes[1].set_xlabel("x")
+axes[1].set_ylabel("v")
+axes[1].set_title("Phase portrait")
+axes[1].legend()
+axes[1].grid(True)
+
+
+# Error
+error = np.sqrt((x - x_s)**2 + (v - v_s)**2)
+
+axes[2].plot(t, error)
+
+axes[2].set_xlabel("t")
+axes[2].set_ylabel("trajectory error")
+axes[2].set_title("Reconstruction error")
+axes[2].grid(True)
+
+
+plt.tight_layout()
+plt.show()
+# %%
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import savgol_filter
+
+
+# ---------------------------------------------------
+# 1) Duffing oscillator
+# ---------------------------------------------------
+def duffing_rhs(t, y, delta, alpha, beta, gamma, omega):
+
+    x, v = y
+
+    dxdt = v
+    dvdt = -delta*v - alpha*x - beta*x**3 + gamma*np.cos(omega*t)
+
+    return np.array([dxdt, dvdt])
+
+
+# ---------------------------------------------------
+# 2) RK4 solver
+# ---------------------------------------------------
+def rk4_step(f, t, y, h, *args):
+
+    k1 = f(t, y, *args)
+    k2 = f(t + 0.5*h, y + 0.5*h*k1, *args)
+    k3 = f(t + 0.5*h, y + 0.5*h*k2, *args)
+    k4 = f(t + h, y + h*k3, *args)
+
+    return y + (h/6)*(k1 + 2*k2 + 2*k3 + k4)
+
+
+def solve_rk4(f, t0, tf, h, y0, *args):
+
+    n_steps = int((tf - t0)/h)
+
+    t = np.zeros(n_steps+1)
+    y = np.zeros((n_steps+1, len(y0)))
+
+    t[0] = t0
+    y[0] = y0
+
+    ti = t0
+    yi = np.array(y0)
+
+    for i in range(n_steps):
+
+        yi = rk4_step(f, ti, yi, h, *args)
+        ti += h
+
+        t[i+1] = ti
+        y[i+1] = yi
+
+    return t, y
+
+
+# ---------------------------------------------------
+# 3) Generate Duffing data
+# ---------------------------------------------------
+
+delta = 0.2
+alpha = -1.0
+beta = 1.0
+gamma = 0.3
+omega = 1.2
+
+t0 = 0
+tf = 80
+dt = 0.01
+
+y0 = [1.0, 0.0]
+
+t, y = solve_rk4(
+    duffing_rhs,
+    t0,
+    tf,
+    dt,
+    y0,
+    delta,
+    alpha,
+    beta,
+    gamma,
+    omega
+)
+
+x = y[:,0]
+v = y[:,1]
+
+
+# ---------------------------------------------------
+# 4) Savitzky–Golay derivative
+# ---------------------------------------------------
+
+dxdt = savgol_filter(x, 51, 3, deriv=1, delta=dt)
+dvdt = savgol_filter(v, 51, 3, deriv=1, delta=dt)
+
+Xdot = np.vstack([dxdt, dvdt]).T
+
+
+# ---------------------------------------------------
+# 5) Build library
+# ---------------------------------------------------
+
+def build_library(x, v, t):
+
+    Theta = np.column_stack([
+        np.ones_like(x),
+        x,
+        v,
+        x**2,
+        x*v,
+        v**2,
+        x**3,
+        np.cos(omega*t)
+    ])
+
+    names = [
+        "1",
+        "x",
+        "v",
+        "x^2",
+        "xv",
+        "v^2",
+        "x^3",
+        "cos(ωt)"
+    ]
+
+    return Theta, names
+
+
+Theta, names = build_library(x, v, t)
+
+
+# ---------------------------------------------------
+# 6) STLSQ SINDy
+# ---------------------------------------------------
+
+def STLSQ(Theta, dXdt, threshold, max_iter=10):
+
+    Xi = np.linalg.lstsq(Theta, dXdt, rcond=None)[0]
+
+    for _ in range(max_iter):
+
+        small = np.abs(Xi) < threshold
+        Xi[small] = 0
+
+        for i in range(dXdt.shape[1]):
+
+            big_idx = Xi[:,i] != 0
+
+            if np.sum(big_idx) == 0:
+                continue
+
+            Xi[big_idx,i] = np.linalg.lstsq(
+                Theta[:,big_idx],
+                dXdt[:,i],
+                rcond=None
+            )[0]
+
+    return Xi
+
+
+Xi = STLSQ(Theta, Xdot, threshold=0.05)
+
+
+# ---------------------------------------------------
+# 7) Print recovered equations
+# ---------------------------------------------------
+
+state_names = ["dx/dt", "dv/dt"]
+
+for i in range(2):
+
+    print("\nRecovered equation for", state_names[i])
+
+    terms = []
+
+    for coef, name in zip(Xi[:,i], names):
+
+        if abs(coef) > 1e-5:
+
+            terms.append(f"{coef:.3f}*{name}")
+
+    print(state_names[i], "=", " + ".join(terms))
+
+
+# ---------------------------------------------------
+# 8) SINDy RHS
+# ---------------------------------------------------
+
+def sindy_rhs(t, y, Xi):
+
+    x, v = y
+
+    library = np.array([
+        1,
+        x,
+        v,
+        x**2,
+        x*v,
+        v**2,
+        x**3,
+        np.cos(omega*t)
+    ])
+
+    dxdt = np.dot(library, Xi[:,0])
+    dvdt = np.dot(library, Xi[:,1])
+
+    return np.array([dxdt, dvdt])
+
+
+# ---------------------------------------------------
+# 9) Simulate SINDy dynamics
+# ---------------------------------------------------
+
+t_s, y_s = solve_rk4(sindy_rhs, t0, tf, dt, y0, Xi)
+
+x_s = y_s[:,0]
+v_s = y_s[:,1]
+
+
+# ---------------------------------------------------
+# 10) Visualization
+# ---------------------------------------------------
+
+fig, axes = plt.subplots(1,3, figsize=(16,4))
+
+
+# Time series
+axes[0].plot(t, x, label="True trajectory", linewidth=2)
+axes[0].plot(t_s, x_s, "--", label="SINDy reconstruction", linewidth=2)
+
+axes[0].set_xlabel("t")
+axes[0].set_ylabel("x(t)")
+axes[0].set_title("Time series")
+axes[0].legend()
+axes[0].grid(True)
+
+
+# Phase portrait
+axes[1].plot(x, v, label="True trajectory", linewidth=2)
+axes[1].plot(x_s, v_s, "--", label="SINDy reconstruction", linewidth=2)
+
+axes[1].set_xlabel("x")
+axes[1].set_ylabel("v")
+axes[1].set_title("Phase portrait")
+axes[1].legend()
+axes[1].grid(True)
+
+
+# Error
+error = np.sqrt((x - x_s)**2 + (v - v_s)**2)
+
+axes[2].plot(t, error)
+
+axes[2].set_xlabel("t")
+axes[2].set_ylabel("trajectory error")
+axes[2].set_title("Reconstruction error")
+axes[2].grid(True)
+
+
+plt.tight_layout()
+plt.show()
+
+# %%
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import savgol_filter
+
+
+# -----------------------------
+# Duffing oscillator
+# -----------------------------
+def duffing_rhs(t, y, delta, alpha, beta, gamma, omega):
+
+    x, v = y
+
+    dxdt = v
+    dvdt = -delta*v - alpha*x - beta*x**3 + gamma*np.cos(omega*t)
+
+    return np.array([dxdt, dvdt])
+
+
+# -----------------------------
+# RK4 solver
+# -----------------------------
+def rk4_step(f, t, y, h, *args):
+
+    k1 = f(t, y, *args)
+    k2 = f(t + 0.5*h, y + 0.5*h*k1, *args)
+    k3 = f(t + 0.5*h, y + 0.5*h*k2, *args)
+    k4 = f(t + h, y + h*k3, *args)
+
+    return y + (h/6)*(k1 + 2*k2 + 2*k3 + k4)
+
+
+def solve_rk4(f, t0, tf, h, y0, *args):
+
+    n_steps = int((tf - t0)/h)
+
+    t = np.zeros(n_steps+1)
+    y = np.zeros((n_steps+1, len(y0)))
+
+    t[0] = t0
+    y[0] = y0
+
+    ti = t0
+    yi = np.array(y0)
+
+    for i in range(n_steps):
+
+        yi = rk4_step(f, ti, yi, h, *args)
+        ti += h
+
+        t[i+1] = ti
+        y[i+1] = yi
+
+    return t, y
+
+
+# -----------------------------
+# Generate Duffing data
+# -----------------------------
+delta = 0.2
+alpha = -1.0
+beta = 1.0
+gamma = 0.3
+omega = 1.2
+
+t0 = 0
+tf = 80
+dt = 0.01
+
+y0 = [1.0, 0.0]
+
+t, y = solve_rk4(
+    duffing_rhs,
+    t0,
+    tf,
+    dt,
+    y0,
+    delta,
+    alpha,
+    beta,
+    gamma,
+    omega
+)
+
+x_true = y[:,0]
+v_true = y[:,1]
+
+
+# -----------------------------
+# Add Gaussian noise
+# -----------------------------
+np.random.seed(0)
+
+noise_level = 0.05
+
+x_noisy = x_true + noise_level*np.random.randn(len(x_true))
+v_noisy = v_true + noise_level*np.random.randn(len(v_true))
+
+
+# -----------------------------
+# Training window
+# -----------------------------
+train_idx = t < 40
+
+x_train = x_noisy[train_idx]
+v_train = v_noisy[train_idx]
+t_train = t[train_idx]
+
+
+# -----------------------------
+# Savitzky–Golay derivative
+# -----------------------------
+dxdt = savgol_filter(x_train, 51, 3, deriv=1, delta=dt)
+dvdt = savgol_filter(v_train, 51, 3, deriv=1, delta=dt)
+
+Xdot = np.vstack([dxdt, dvdt]).T
+
+
+# -----------------------------
+# Build candidate library
+# -----------------------------
+def build_library(x, v, t):
+
+    Theta = np.column_stack([
+        np.ones_like(x),
+        x,
+        v,
+        x**2,
+        x*v,
+        v**2,
+        x**3,
+        np.cos(omega*t),
+        np.sin(omega*t)
+    ])
+
+    names = [
+        "1",
+        "x",
+        "v",
+        "x^2",
+        "xv",
+        "v^2",
+        "x^3",
+        "cos(ωt)",
+        "sin(ωt)"
+    ]
+
+    return Theta, names
+
+
+Theta, names = build_library(x_train, v_train, t_train)
+
+
+# -----------------------------
+# STLSQ SINDy
+# -----------------------------
+def STLSQ(Theta, dXdt, threshold, max_iter=10):
+
+    Xi = np.linalg.lstsq(Theta, dXdt, rcond=None)[0]
+
+    for _ in range(max_iter):
+
+        small = np.abs(Xi) < threshold
+        Xi[small] = 0
+
+        for i in range(dXdt.shape[1]):
+
+            big = Xi[:,i] != 0
+
+            if np.sum(big) == 0:
+                continue
+
+            Xi[big,i] = np.linalg.lstsq(
+                Theta[:,big],
+                dXdt[:,i],
+                rcond=None
+            )[0]
+
+    return Xi
+
+
+Xi = STLSQ(Theta, Xdot, threshold=0.02)
+
+
+# -----------------------------
+# Print recovered equations
+# -----------------------------
+state_names = ["dx/dt", "dv/dt"]
+
+for i in range(2):
+
+    print("\nRecovered equation for", state_names[i])
+
+    terms = []
+
+    for coef, name in zip(Xi[:,i], names):
+
+        if abs(coef) > 1e-5:
+
+            terms.append(f"{coef:.3f}*{name}")
+
+    print(state_names[i], "=", " + ".join(terms))
+
+
+# -----------------------------
+# SINDy RHS
+# -----------------------------
+def sindy_rhs(t, y, Xi):
+
+    x, v = y
+
+    library = np.array([
+        1,
+        x,
+        v,
+        x**2,
+        x*v,
+        v**2,
+        x**3,
+        np.cos(omega*t),
+        np.sin(omega*t)
+    ])
+
+    dxdt = np.dot(library, Xi[:,0])
+    dvdt = np.dot(library, Xi[:,1])
+
+    return np.array([dxdt, dvdt])
+
+
+# -----------------------------
+# Simulate SINDy dynamics
+# -----------------------------
+t_s, y_s = solve_rk4(sindy_rhs, t0, tf, dt, y0, Xi)
+
+x_s = y_s[:,0]
+v_s = y_s[:,1]
+
+
+# -----------------------------
+# Visualization
+# -----------------------------
+fig, axes = plt.subplots(1,3, figsize=(16,4))
+
+
+# Time series
+axes[0].plot(t, x_true, label="True trajectory", linewidth=2)
+axes[0].scatter(t, x_noisy, s=2, alpha=0.3, label="Noisy data")
+axes[0].plot(t_s, x_s, "--", label="SINDy reconstruction", linewidth=2)
+
+axes[0].axvline(40, color="k", linestyle=":")
+
+axes[0].set_xlabel("t")
+axes[0].set_ylabel("x(t)")
+axes[0].set_title("Time series")
+axes[0].legend()
+axes[0].grid(True)
+
+
+# Phase portrait
+axes[1].plot(x_true, v_true, label="True trajectory")
+axes[1].plot(x_s, v_s, "--", label="SINDy reconstruction")
+
+axes[1].set_xlabel("x")
+axes[1].set_ylabel("v")
+axes[1].set_title("Phase portrait")
+axes[1].legend()
+axes[1].grid(True)
+
+
+# Error
+error = np.sqrt((x_true - x_s)**2 + (v_true - v_s)**2)
+
+axes[2].plot(t, error)
+
+axes[2].axvline(40, color="k", linestyle=":")
+
+axes[2].set_xlabel("t")
+axes[2].set_ylabel("trajectory error")
+axes[2].set_title("Reconstruction error")
+axes[2].grid(True)
+
+
+plt.tight_layout()
+plt.show()
+# %%
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+from scipy.signal import savgol_filter
+
+
+# =============================
+# Duffing oscillator
+# =============================
+
+def duffing_rhs(t, y, delta, alpha, beta, gamma, omega):
+
+    x, v = y
+
+    dxdt = v
+    dvdt = -delta*v - alpha*x - beta*x**3 + gamma*np.cos(omega*t)
+
+    return np.array([dxdt, dvdt])
+
+
+# =============================
+# RK4 solver
+# =============================
+
+def rk4_step(f, t, y, h, *args):
+
+    k1 = f(t, y, *args)
+    k2 = f(t + 0.5*h, y + 0.5*h*k1, *args)
+    k3 = f(t + 0.5*h, y + 0.5*h*k2, *args)
+    k4 = f(t + h, y + h*k3, *args)
+
+    return y + (h/6)*(k1 + 2*k2 + 2*k3 + k4)
+
+
+def solve_rk4(f, t0, tf, h, y0, *args):
+
+    n_steps = int((tf - t0)/h)
+
+    t = np.zeros(n_steps+1)
+    y = np.zeros((n_steps+1, len(y0)))
+
+    t[0] = t0
+    y[0] = y0
+
+    ti = t0
+    yi = np.array(y0)
+
+    for i in range(n_steps):
+
+        yi = rk4_step(f, ti, yi, h, *args)
+        ti += h
+
+        t[i+1] = ti
+        y[i+1] = yi
+
+    return t, y
+
+
+# =============================
+# Generate data
+# =============================
+
+delta = 0.2
+alpha = -1
+beta = 1
+gamma = 0.3
+omega = 1.2
+
+t0 = 0
+tf = 80
+dt = 0.01
+
+y0 = [1.0, 0.0]
+
+t, y = solve_rk4(
+    duffing_rhs,
+    t0,
+    tf,
+    dt,
+    y0,
+    delta,
+    alpha,
+    beta,
+    gamma,
+    omega
+)
+
+x_true = y[:,0]
+v_true = y[:,1]
+
+
+# =============================
+# Add noise
+# =============================
+
+np.random.seed(0)
+
+noise_level = 0.05
+
+x_noisy = x_true + noise_level*np.random.randn(len(x_true))
+
+
+# =============================
+# ResNet trajectory regression
+# =============================
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+t_norm = 2*(t - t.min())/(t.max()-t.min()) - 1
+
+X = torch.tensor(t_norm, dtype=torch.float32).view(-1,1).to(device)
+Y = torch.tensor(x_noisy, dtype=torch.float32).view(-1,1).to(device)
+
+
+class ResBlock(nn.Module):
+
+    def __init__(self, width):
+
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Linear(width, width),
+            nn.Tanh(),
+            nn.Linear(width, width)
+        )
+
+    def forward(self, x):
+
+        return x + self.net(x)
+
+
+class ResNet(nn.Module):
+
+    def __init__(self):
+
+        super().__init__()
+
+        width = 64
+
+        self.input = nn.Linear(1, width)
+
+        self.blocks = nn.Sequential(
+            ResBlock(width),
+            ResBlock(width),
+            ResBlock(width),
+            ResBlock(width)
+        )
+
+        self.output = nn.Linear(width,1)
+
+    def forward(self,x):
+
+        x = torch.tanh(self.input(x))
+        x = self.blocks(x)
+        return self.output(x)
+
+
+model = ResNet().to(device)
+
+opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+loss_fn = nn.MSELoss()
+
+
+# training
+for epoch in range(2000):
+
+    pred = model(X)
+
+    loss = loss_fn(pred, Y)
+
+    opt.zero_grad()
+    loss.backward()
+    opt.step()
+
+    if epoch % 200 == 0:
+        print(epoch, loss.item())
+
+
+# =============================
+# Smooth trajectory from NN
+# =============================
+
+model.eval()
+
+with torch.no_grad():
+
+    x_smooth = model(X).cpu().numpy().flatten()
+
+
+# =============================
+# derivative estimation
+# =============================
+
+v_smooth = savgol_filter(x_smooth, 51, 3, deriv=1, delta=dt)
+
+dxdt = savgol_filter(x_smooth, 51, 3, deriv=1, delta=dt)
+dvdt = savgol_filter(v_smooth, 51, 3, deriv=1, delta=dt)
+
+Xdot = np.vstack([dxdt, dvdt]).T
+
+
+# =============================
+# SINDy library
+# =============================
+
+def build_library(x, v, t):
+
+    Theta = np.column_stack([
+        np.ones_like(x),
+        x,
+        v,
+        x**2,
+        x*v,
+        v**2,
+        x**3,
+        np.cos(omega*t)
+    ])
+
+    names = [
+        "1",
+        "x",
+        "v",
+        "x^2",
+        "xv",
+        "v^2",
+        "x^3",
+        "cos(ωt)"
+    ]
+
+    return Theta, names
+
+
+Theta, names = build_library(x_smooth, v_smooth, t)
+
+
+# =============================
+# STLSQ SINDy
+# =============================
+
+def STLSQ(Theta, dXdt, threshold):
+
+    Xi = np.linalg.lstsq(Theta, dXdt, rcond=None)[0]
+
+    for _ in range(10):
+
+        small = np.abs(Xi) < threshold
+        Xi[small] = 0
+
+        for i in range(dXdt.shape[1]):
+
+            big = Xi[:,i] != 0
+
+            Xi[big,i] = np.linalg.lstsq(
+                Theta[:,big],
+                dXdt[:,i],
+                rcond=None
+            )[0]
+
+    return Xi
+
+
+Xi = STLSQ(Theta, Xdot, 0.02)
+
+
+print("\nRecovered equation")
+
+for i, name in enumerate(["dx/dt","dv/dt"]):
+
+    terms = []
+
+    for coef, term in zip(Xi[:,i], names):
+
+        if abs(coef) > 1e-4:
+            terms.append(f"{coef:.3f}*{term}")
+
+    print(name,"=", " + ".join(terms))
+
+
+# =============================
+# Visualization
+# =============================
+
+plt.figure(figsize=(12,4))
+
+plt.subplot(1,2,1)
+plt.plot(t, x_true, label="true")
+plt.scatter(t, x_noisy, s=3, alpha=0.3, label="noisy")
+plt.plot(t, x_smooth, label="ResNet smooth")
+plt.legend()
+plt.title("trajectory denoising")
+
+
+plt.subplot(1,2,2)
+plt.plot(x_true, v_true, label="true")
+plt.plot(x_smooth, v_smooth, label="ResNet")
+plt.legend()
+plt.title("phase portrait")
+
+plt.show()
+# %%
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+from scipy.signal import savgol_filter
+
+
+# =============================
+# Duffing oscillator
+# =============================
+
+def duffing_rhs(t, y, delta, alpha, beta, gamma, omega):
+
+    x, v = y
+
+    dxdt = v
+    dvdt = -delta*v - alpha*x - beta*x**3 + gamma*np.cos(omega*t)
+
+    return np.array([dxdt, dvdt])
+
+
+# =============================
+# RK4 solver
+# =============================
+
+def rk4_step(f, t, y, h, *args):
+
+    k1 = f(t, y, *args)
+    k2 = f(t + 0.5*h, y + 0.5*h*k1, *args)
+    k3 = f(t + 0.5*h, y + 0.5*h*k2, *args)
+    k4 = f(t + h, y + h*k3, *args)
+
+    return y + (h/6)*(k1 + 2*k2 + 2*k3 + k4)
+
+
+def solve_rk4(f, t0, tf, h, y0, *args):
+
+    n_steps = int((tf - t0)/h)
+
+    t = np.zeros(n_steps+1)
+    y = np.zeros((n_steps+1, len(y0)))
+
+    t[0] = t0
+    y[0] = y0
+
+    ti = t0
+    yi = np.array(y0)
+
+    for i in range(n_steps):
+
+        yi = rk4_step(f, ti, yi, h, *args)
+        ti += h
+
+        t[i+1] = ti
+        y[i+1] = yi
+
+    return t, y
+
+
+# =============================
+# Generate Duffing data
+# =============================
+
+delta = 0.2
+alpha = -1
+beta = 1
+gamma = 0.3
+omega = 1.2
+
+t0 = 0
+tf = 160
+dt = 0.01
+
+y0 = [1.0, 0.0]
+
+t, y = solve_rk4(
+    duffing_rhs,
+    t0,
+    tf,
+    dt,
+    y0,
+    delta,
+    alpha,
+    beta,
+    gamma,
+    omega
+)
+
+x_true = y[:,0]
+v_true = y[:,1]
+
+
+# =============================
+# Add noise
+# =============================
+
+np.random.seed(0)
+
+noise_level = 0.05
+x_noisy = x_true + noise_level*np.random.randn(len(x_true))
+
+
+# =============================
+# Use only first 80 seconds
+# =============================
+
+mask = t <= 80
+
+t = t[mask]
+x_true = x_true[mask]
+v_true = v_true[mask]
+x_noisy = x_noisy[mask]
+
+
+# =============================
+# Fourier feature input
+# =============================
+
+t_norm = 2*(t - t.min())/(t.max()-t.min()) - 1
+
+features = np.stack([
+    t_norm,
+    np.sin(omega*t),
+    np.cos(omega*t)
+], axis=1)
+
+X = torch.tensor(features, dtype=torch.float32)
+Y = torch.tensor(x_noisy, dtype=torch.float32).view(-1,1)
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+X = X.to(device)
+Y = Y.to(device)
+
+
+# =============================
+# ResNet model
+# =============================
+
+class ResBlock(nn.Module):
+
+    def __init__(self, width):
+
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Linear(width, width),
+            nn.Tanh(),
+            nn.Linear(width, width)
+        )
+
+    def forward(self, x):
+
+        return x + self.net(x)
+
+
+class ResNet(nn.Module):
+
+    def __init__(self):
+
+        super().__init__()
+
+        width = 128
+
+        self.input = nn.Linear(3, width)
+
+        self.blocks = nn.Sequential(
+            ResBlock(width),
+            ResBlock(width),
+            ResBlock(width),
+            ResBlock(width)
+        )
+
+        self.output = nn.Linear(width,1)
+
+    def forward(self,x):
+
+        x = torch.tanh(self.input(x))
+        x = self.blocks(x)
+        return self.output(x)
+
+
+model = ResNet().to(device)
+
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1000, gamma=0.5)
+
+loss_fn = nn.MSELoss()
+
+
+# =============================
+# Training
+# =============================
+
+for epoch in range(5000):
+
+    pred = model(X)
+
+    loss = loss_fn(pred, Y)
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    scheduler.step()
+
+    if epoch % 500 == 0:
+        print(epoch, loss.item())
+
+
+# =============================
+# Smooth trajectory
+# =============================
+
+model.eval()
+
+with torch.no_grad():
+
+    x_smooth = model(X).cpu().numpy().flatten()
+
+
+# =============================
+# Derivative estimation
+# =============================
+
+v_smooth = savgol_filter(x_smooth, 51, 3, deriv=1, delta=dt)
+
+dxdt = savgol_filter(x_smooth, 51, 3, deriv=1, delta=dt)
+dvdt = savgol_filter(v_smooth, 51, 3, deriv=1, delta=dt)
+
+Xdot = np.vstack([dxdt, dvdt]).T
+
+
+# =============================
+# SINDy library
+# =============================
+
+def build_library(x, v, t):
+
+    Theta = np.column_stack([
+        np.ones_like(x),
+        x,
+        v,
+        x**2,
+        x*v,
+        v**2,
+        x**3,
+        np.cos(omega*t)
+    ])
+
+    names = [
+        "1",
+        "x",
+        "v",
+        "x^2",
+        "xv",
+        "v^2",
+        "x^3",
+        "cos(ωt)"
+    ]
+
+    return Theta, names
+
+
+Theta, names = build_library(x_smooth, v_smooth, t)
+
+
+# =============================
+# STLSQ SINDy
+# =============================
+
+def STLSQ(Theta, dXdt, threshold):
+
+    Xi = np.linalg.lstsq(Theta, dXdt, rcond=None)[0]
+
+    for _ in range(10):
+
+        small = np.abs(Xi) < threshold
+        Xi[small] = 0
+
+        for i in range(dXdt.shape[1]):
+
+            big = Xi[:,i] != 0
+
+            Xi[big,i] = np.linalg.lstsq(
+                Theta[:,big],
+                dXdt[:,i],
+                rcond=None
+            )[0]
+
+    return Xi
+
+
+Xi = STLSQ(Theta, Xdot, 0.02)
+
+
+print("\nRecovered equation")
+
+for i,name in enumerate(["dx/dt","dv/dt"]):
+
+    terms = []
+
+    for coef, term in zip(Xi[:,i], names):
+
+        if abs(coef) > 1e-4:
+            terms.append(f"{coef:.3f}*{term}")
+
+    print(name,"=", " + ".join(terms))
+
+
+# =============================
+# Visualization
+# =============================
+
+plt.figure(figsize=(12,4))
+
+plt.subplot(1,2,1)
+plt.plot(t, x_true, label="true")
+plt.scatter(t, x_noisy, s=3, alpha=0.3, label="noisy")
+plt.plot(t, x_smooth, label="ResNet smooth")
+plt.legend()
+plt.title("trajectory denoising")
+
+
+plt.subplot(1,2,2)
+plt.plot(x_true, v_true, label="true")
+plt.plot(x_smooth, v_smooth, label="ResNet")
+plt.legend()
+plt.title("phase portrait")
+
+plt.show()
+# %%
+# =============================
+# SINDy dynamics simulation
+# =============================
+
+def sindy_rhs(t, y, Xi):
+
+    x, v = y
+
+    library = np.array([
+        1,
+        x,
+        v,
+        x**2,
+        x*v,
+        v**2,
+        x**3,
+        np.cos(omega*t)
+    ])
+
+    dxdt = np.dot(library, Xi[:,0])
+    dvdt = np.dot(library, Xi[:,1])
+
+    return np.array([dxdt, dvdt])
+
+
+t_s, y_s = solve_rk4(
+    sindy_rhs,
+    t[0],
+    t[-1],
+    dt,
+    y0,
+    Xi
+)
+
+x_s = y_s[:,0]
+v_s = y_s[:,1]
+#%%
+plt.figure(figsize=(15,4))
+
+# -------------------------
+# trajectory
+# -------------------------
+plt.subplot(1,3,1)
+
+plt.plot(t, x_true, label="True")
+plt.scatter(t, x_noisy, s=3, alpha=0.3, label="Noisy")
+plt.plot(t, x_smooth, label="ResNet")
+plt.plot(t_s, x_s, "--", label="SINDy")
+
+plt.legend()
+plt.title("Trajectory comparison")
+plt.xlabel("t")
+plt.ylabel("x(t)")
+plt.grid()
+
+
+# -------------------------
+# phase portrait
+# -------------------------
+plt.subplot(1,3,2)
+
+plt.plot(x_true, v_true, label="True")
+plt.plot(x_smooth, v_smooth, label="ResNet")
+plt.plot(x_s, v_s, "--", label="SINDy")
+
+plt.legend()
+plt.title("Phase portrait")
+plt.xlabel("x")
+plt.ylabel("v")
+plt.grid()
+
+
+# -------------------------
+# error
+# -------------------------
+plt.subplot(1,3,3)
+
+err = np.sqrt((x_true - x_s)**2 + (v_true - v_s)**2)
+
+plt.plot(t, err)
+
+plt.title("SINDy reconstruction error")
+plt.xlabel("t")
+plt.ylabel("error")
+plt.grid()
+
+plt.tight_layout()
+plt.show()
+# %%
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+from scipy.signal import savgol_filter
+
+
+# ======================================
+# Duffing oscillator
+# ======================================
+
+def duffing_rhs(t, y, delta, alpha, beta, gamma, omega):
+
+    x, v = y
+
+    dxdt = v
+    dvdt = -delta*v - alpha*x - beta*x**3 + gamma*np.cos(omega*t)
+
+    return np.array([dxdt, dvdt])
+
+
+# ======================================
+# RK4 solver
+# ======================================
+
+def rk4_step(f, t, y, h, *args):
+
+    k1 = f(t, y, *args)
+    k2 = f(t + 0.5*h, y + 0.5*h*k1, *args)
+    k3 = f(t + 0.5*h, y + 0.5*h*k2, *args)
+    k4 = f(t + h, y + h*k3, *args)
+
+    return y + (h/6)*(k1 + 2*k2 + 2*k3 + k4)
+
+
+def solve_rk4(f, t0, tf, h, y0, *args):
+
+    n_steps = int((tf - t0)/h)
+
+    t = np.zeros(n_steps+1)
+    y = np.zeros((n_steps+1, len(y0)))
+
+    t[0] = t0
+    y[0] = y0
+
+    ti = t0
+    yi = np.array(y0)
+
+    for i in range(n_steps):
+
+        yi = rk4_step(f, ti, yi, h, *args)
+        ti += h
+
+        t[i+1] = ti
+        y[i+1] = yi
+
+    return t, y
+
+
+# ======================================
+# Generate Duffing data
+# ======================================
+
+delta = 0.2
+alpha = -1
+beta = 1
+gamma = 0.3
+omega = 1.2
+
+t0 = 0
+tf = 160
+dt = 0.01
+
+y0 = [1.0, 0.0]
+
+t, y = solve_rk4(
+    duffing_rhs,
+    t0,
+    tf,
+    dt,
+    y0,
+    delta,
+    alpha,
+    beta,
+    gamma,
+    omega
+)
+
+x_true = y[:,0]
+v_true = y[:,1]
+
+
+# ======================================
+# Add noise
+# ======================================
+
+np.random.seed(0)
+
+noise_level = 0.05
+x_noisy = x_true + noise_level*np.random.randn(len(x_true))
+
+
+# ======================================
+# Use only first 80 seconds
+# ======================================
+
+mask = t <= 80
+
+t = t[mask]
+x_true = x_true[mask]
+v_true = v_true[mask]
+x_noisy = x_noisy[mask]
+
+
+# ======================================
+# Fourier feature input
+# ======================================
+
+t_norm = 2*(t - t.min())/(t.max()-t.min()) - 1
+
+features = np.stack([
+    t_norm,
+    np.sin(omega*t),
+    np.cos(omega*t)
+], axis=1)
+
+X = torch.tensor(features, dtype=torch.float32)
+Y = torch.tensor(x_noisy, dtype=torch.float32).view(-1,1)
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+X = X.to(device)
+Y = Y.to(device)
+
+
+# ======================================
+# Deep ResNet model
+# ======================================
+
+class ResBlock(nn.Module):
+
+    def __init__(self, width):
+
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Linear(width, width),
+            nn.GELU(),
+            nn.Linear(width, width),
+            nn.GELU()
+        )
+
+    def forward(self, x):
+
+        return x + self.net(x)
+
+
+class DeepResNet(nn.Module):
+
+    def __init__(self):
+
+        super().__init__()
+
+        width = 256
+
+        self.input = nn.Linear(3, width)
+
+        self.blocks = nn.Sequential(
+
+            ResBlock(width),
+            ResBlock(width),
+            ResBlock(width),
+            ResBlock(width),
+
+            ResBlock(width),
+            ResBlock(width),
+            ResBlock(width),
+            ResBlock(width)
+
+        )
+
+        self.output = nn.Linear(width,1)
+
+    def forward(self,x):
+
+        x = torch.tanh(self.input(x))
+        x = self.blocks(x)
+        return self.output(x)
+
+
+model = DeepResNet().to(device)
+
+
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+scheduler = torch.optim.lr_scheduler.StepLR(
+    optimizer,
+    step_size=1500,
+    gamma=0.5
+)
+
+loss_fn = nn.MSELoss()
+
+
+# ======================================
+# Training
+# ======================================
+
+for epoch in range(6000):
+
+    pred = model(X)
+
+    loss = loss_fn(pred, Y)
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    scheduler.step()
+
+    if epoch % 500 == 0:
+
+        print(epoch, loss.item())
+
+
+# ======================================
+# Smooth trajectory from ResNet
+# ======================================
+
+model.eval()
+
+with torch.no_grad():
+
+    x_smooth = model(X).cpu().numpy().flatten()
+
+
+# ======================================
+# Derivative estimation
+# ======================================
+
+v_smooth = savgol_filter(x_smooth, 51, 3, deriv=1, delta=dt)
+
+dxdt = savgol_filter(x_smooth, 51, 3, deriv=1, delta=dt)
+dvdt = savgol_filter(v_smooth, 51, 3, deriv=1, delta=dt)
+
+Xdot = np.vstack([dxdt, dvdt]).T
+
+
+# ======================================
+# SINDy library
+# ======================================
+
+def build_library(x, v, t):
+
+    Theta = np.column_stack([
+        np.ones_like(x),
+        x,
+        v,
+        x**2,
+        x*v,
+        v**2,
+        x**3,
+        np.cos(omega*t)
+    ])
+
+    names = [
+        "1",
+        "x",
+        "v",
+        "x^2",
+        "xv",
+        "v^2",
+        "x^3",
+        "cos(ωt)"
+    ]
+
+    return Theta, names
+
+
+Theta, names = build_library(x_smooth, v_smooth, t)
+
+
+# ======================================
+# STLSQ SINDy
+# ======================================
+
+def STLSQ(Theta, dXdt, threshold):
+
+    Xi = np.linalg.lstsq(Theta, dXdt, rcond=None)[0]
+
+    for _ in range(10):
+
+        small = np.abs(Xi) < threshold
+        Xi[small] = 0
+
+        for i in range(dXdt.shape[1]):
+
+            big = Xi[:,i] != 0
+
+            Xi[big,i] = np.linalg.lstsq(
+                Theta[:,big],
+                dXdt[:,i],
+                rcond=None
+            )[0]
+
+    return Xi
+
+
+Xi = STLSQ(Theta, Xdot, 0.02)
+
+
+print("\nRecovered equation")
+
+for i,name in enumerate(["dx/dt","dv/dt"]):
+
+    terms = []
+
+    for coef, term in zip(Xi[:,i], names):
+
+        if abs(coef) > 1e-4:
+
+            terms.append(f"{coef:.3f}*{term}")
+
+    print(name,"=", " + ".join(terms))
+
+
+# ======================================
+# SINDy trajectory reconstruction
+# ======================================
+
+def sindy_rhs(t, y, Xi):
+
+    x, v = y
+
+    library = np.array([
+        1,
+        x,
+        v,
+        x**2,
+        x*v,
+        v**2,
+        x**3,
+        np.cos(omega*t)
+    ])
+
+    dxdt = np.dot(library, Xi[:,0])
+    dvdt = np.dot(library, Xi[:,1])
+
+    return np.array([dxdt, dvdt])
+
+
+t_s, y_s = solve_rk4(
+    sindy_rhs,
+    t[0],
+    t[-1],
+    dt,
+    y0,
+    Xi
+)
+
+x_s = y_s[:,0]
+v_s = y_s[:,1]
+
+
+# ======================================
+# Visualization
+# ======================================
+
+plt.figure(figsize=(15,4))
+
+
+plt.subplot(1,3,1)
+
+plt.plot(t, x_true, label="True")
+plt.scatter(t, x_noisy, s=3, alpha=0.3, label="Noisy")
+plt.plot(t, x_smooth, label="ResNet")
+plt.plot(t_s, x_s, "--", label="SINDy")
+
+plt.legend()
+plt.title("Trajectory comparison")
+plt.xlabel("t")
+plt.ylabel("x(t)")
+plt.grid()
+
+
+plt.subplot(1,3,2)
+
+plt.plot(x_true, v_true, label="True")
+plt.plot(x_smooth, v_smooth, label="ResNet")
+plt.plot(x_s, v_s, "--", label="SINDy")
+
+plt.legend()
+plt.title("Phase portrait")
+plt.xlabel("x")
+plt.ylabel("v")
+plt.grid()
+
+
+plt.subplot(1,3,3)
+
+err = np.sqrt((x_true - x_s)**2 + (v_true - v_s)**2)
+
+plt.plot(t, err)
+
+plt.title("SINDy reconstruction error")
+plt.xlabel("t")
+plt.ylabel("error")
+plt.grid()
+
+
+plt.tight_layout()
+plt.show()
+# %%
