@@ -29,8 +29,10 @@ The workflow consists of the following steps:
 
 3. **SINDy (Sparse Regression)**
    - Candidate function library includes:
+   $$
      - Polynomial terms: \( x, v, x^2, x^3, xv, v^2 \)
      - Forcing terms: \( \cos(\omega t), \sin(\omega t) \)
+   $$
    - Sequential Thresholded Least Squares (STLSQ) is used  
 
 4. **Neural Denoising**
@@ -60,23 +62,11 @@ dv/dt = 1.016 x - 0.201 v - 1.014 x^3 + 0.304 cos(ωt)
 
 ---
 
-## 📈 Example Result
-
-![Results](results.png)
-
-- Left: time series (true, noisy, SINDy)  
-- Middle: phase portrait  
-- Right: reconstruction error  
-
----
-
 ## 🚀 Key Insights
 
 - SINDy can recover nonlinear governing equations directly from data  
 - The method is sensitive to noise due to numerical differentiation  
-- Classical filtering (Savitzky–Golay) already performs well  
 - Neural denoising (ResNet) can further improve robustness  
-
 
 ---
 
