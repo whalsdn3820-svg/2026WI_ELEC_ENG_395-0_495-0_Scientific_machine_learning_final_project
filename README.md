@@ -29,10 +29,8 @@ The workflow consists of the following steps:
 
 3. **SINDy (Sparse Regression)**
    - Candidate function library includes:
-   $$
      - Polynomial terms: \( x, v, x^2, x^3, xv, v^2 \)
      - Forcing terms: \( \cos(\omega t), \sin(\omega t) \)
-   $$
    - Sequential Thresholded Least Squares (STLSQ) is used  
 
 4. **Neural Denoising**
