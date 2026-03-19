@@ -72,7 +72,7 @@ dv/dt = 1.016 x - 0.201 v - 1.014 x^3 + 0.304 cos(ωt)
 
 You can find the presentation here:
 
-👉 https://youtube.com/YOUR_VIDEO_LINK
+👉 https://youtu.be/3q4eU9pM92A
 
 ---
 
